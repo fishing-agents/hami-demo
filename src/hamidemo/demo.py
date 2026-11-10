@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import typer
 import yaml
 
 from . import env as envs
@@ -47,6 +48,23 @@ class Run:
         roles = envs.node_values(self.spec["environment"]) if self.spec.get("environment") != "mock" else {}
         self.values = {k: os.environ.get(k, roles.get(k, str(v))) for k, v in self.spec.get("values", {}).items()}
         self.charts = 0
+
+    def host_views(self, p: dict, pod_node: str) -> None:
+        """host_exec commands over SSH on the pod's node, plus any `host_nodes` (roles like REMOTE_SERVER_NODE)."""
+        nodes = [pod_node, *(self.values.get(r, r) for r in p.get("host_nodes", []))]
+        for node in dict.fromkeys(filter(None, nodes)):
+            for cmd in p.get("host_exec", []):
+                self.log(f"host {node}: {cmd}", self.on_host(node, cmd))
+
+    def on_host(self, node: str, cmd: str) -> str:
+        """Run cmd over SSH on the host behind a node; hosts come from config.toml [environments.<env>.hosts]."""
+        spec = envs.load(self.spec["environment"])
+        if node not in spec.get("hosts", {}):
+            return f"(no host for node {node!r} in config.toml)"
+        try:
+            return envs.ssh(spec, node, cmd=cmd)
+        except (OSError, typer.Exit) as e:  # sh raises typer.Exit on a failed command; the demo goes on without the host view
+            return f"(ssh {node} failed: {e!r})"
 
     def log(self, title: str, text: str = "") -> None:
         block = f"\n==> {title}\n{text.rstrip()}\n" if text else f"\n==> {title}\n"
@@ -103,6 +121,10 @@ class Run:
             for d in [*p.get("deployments", []), *p.get("scale", {})]:
                 self.k("rollout", "status", f"deploy/{d}", f"--timeout={p.get('timeout', 1800)}s")
             if pod := p.get("pod"):
+                if marker := p.get("ready_log"):
+                    # Host views while the pod still holds its GPUs, then let it finish.
+                    wait_until(lambda: marker in self.k("logs", pod, check=False, quiet=True), p.get("timeout", 600), what=f"{pod}: {marker}")
+                    self.host_views(p, kjson("-n", self.ns, "pod", pod)["spec"].get("nodeName", ""))
                 wait_until(lambda: kjson("-n", self.ns, "pod", pod)["status"]["phase"] in ("Succeeded", "Failed"), p.get("timeout", 600), what=pod)
         finally:
             if stream:
@@ -116,6 +138,7 @@ class Run:
                     self.log(f"{pod_name} MIG reservation", json.dumps(json.loads(mig), indent=1))
                 for cmd in p.get("exec", []):
                     self.log(f"{pod_name}: {cmd}", self.k("exec", pod_name, "--", *cmd.split(), check=False))
+                self.host_views(p, kjson("-n", self.ns, pod_name)["spec"].get("nodeName", ""))
         self.snapshot(p["name"])
         for t in p.get("check", []) or p.get("bench", {}).get("targets", []):
             self.log(f"Completion via {t['name']}", self.completion(t["url"], t["model"]))

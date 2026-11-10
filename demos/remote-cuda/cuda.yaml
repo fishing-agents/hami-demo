@@ -13,11 +13,14 @@ spec:
       image: nvidia/cuda:13.0.2-devel-ubuntu24.04
       env:
         - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+        - {name: HOLD_SECONDS, value: "30"}
       command: [bash, -c]
       args:
         - |
           cat > /tmp/add.cu <<'EOF'
           #include <cstdio>
+          #include <cstdlib>
+          #include <unistd.h>
           __global__ void add(int *r) { *r = 35 + 7; }
           int main() {
             int n = 0; cudaGetDeviceCount(&n);
@@ -30,6 +33,8 @@ spec:
               printf("device %d %s total=%zu MiB 35+7=%d\n", d, p.name, t >> 20, h);
               if (h != 42) return 1;
             }
+            fflush(stdout);
+            sleep(atoi(getenv("HOLD_SECONDS") ?: "0"));  // keep the remote contexts open for the host nvidia-smi
             return n == 0;
           }
           EOF

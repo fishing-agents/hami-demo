@@ -6,6 +6,7 @@ description: >
 values:
   MIG_NODE: a100-1     # defaults; config.toml [environments.a100.nodes] or env vars override
   CLIENT_NODE: a100-1
+  REMOTE_SERVER_NODE: a100-2
 teardown: end
 phases:
   - name: 10 GB server on a 2g.10gb slice
@@ -13,13 +14,18 @@ phases:
     deployments: [vllm-mig-small]
     selector: app=vllm-mig,size=small
     exec: [nvidia-smi]
+    host_exec: [nvidia-smi]
     check: [{name: mig-2g.10gb, url: "http://vllm-mig-small:8000", model: Qwen/Qwen3-1.7B}]
   - name: 20 GB server binpacked next to it on a 3g.20gb slice
     manifest: ../vllm-mig/vllm-mig-large.yaml
     deployments: [vllm-mig-large]
     selector: app=vllm-mig
     exec: [nvidia-smi]
+    host_exec: [nvidia-smi]
     check: [{name: mig-3g.20gb, url: "http://vllm-mig-large:8000", model: Qwen/Qwen3-4B}]
   - name: CUDA on CLIENT_NODE, GPUs on the remote server
     manifest: ../remote-cuda/cuda.yaml
     pod: remote-cuda
+    ready_log: "35+7=42"  # kernels done, contexts still open (HOLD_SECONDS)
+    host_exec: [nvidia-smi]
+    host_nodes: [REMOTE_SERVER_NODE]

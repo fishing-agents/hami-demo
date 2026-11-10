@@ -5,10 +5,14 @@ description: >
   A workload reserves the whole server, so the phases run one after the other.
 values:
   CLIENT_NODE: a100-1  # default; config.toml [environments.a100.nodes] CLIENT_NODE or $CLIENT_NODE override
+  REMOTE_SERVER_NODE: a100-2
 phases:
   - name: CUDA kernel
     manifest: cuda.yaml
     pod: remote-cuda
+    ready_log: "35+7=42"  # kernels done, contexts still open (HOLD_SECONDS)
+    host_exec: [nvidia-smi]
+    host_nodes: [REMOTE_SERVER_NODE]
   - name: vLLM TP=2
     manifest: vllm.yaml
     deployments: [vllm-remote-gpu]
